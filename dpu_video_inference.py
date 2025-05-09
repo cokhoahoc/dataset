@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import time
 import imageio
+import csv
 
 
 def get_input_output_tensors(runner):
@@ -53,14 +54,25 @@ def run_video_inference(xmodel_path, video_input_path, video_output_path):
     fps = reader.get_meta_data()['fps']
     writer = imageio.get_writer(video_output_path, fps=fps)
 
+    # Biến theo dõi hiệu năng
     frame_id = 0
+    inf_times = []
+    full_times = []
+    perf_log = []
+
+    total_start_time = time.time()
+
     for frame in reader:
+        frame_start = time.time()
+
         # imageio uses RGB by default
         input_data = preprocess_frame(frame, input_shape)
         np.copyto(input_data_buffer[0], input_data.reshape(input_shape).astype(input_dtype))
 
+        inf_start = time.time()
         job_id = runner.execute_async(input_data_buffer, output_data_buffer)
         runner.wait(job_id)
+        inf_end = time.time()
 
         output_q = output_data_buffer[0].flatten()[0]
         output_real = (output_q - 0) * (1.0 / 127.0)
@@ -74,12 +86,39 @@ def run_video_inference(xmodel_path, video_input_path, video_output_path):
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
         writer.append_data(frame_rgb)
-        print(f"[INFO] Frame {frame_id}: {text}")
+
+        inf_time = (inf_end - inf_start) * 1000  # milliseconds
+        frame_time = (time.time() - frame_start) * 1000
+        inf_times.append(inf_time)
+        full_times.append(frame_time)
+        perf_log.append([frame_id, inf_time, frame_time, output_real, label])
+
+        print(f"[INFO] Frame {frame_id}: {text} | Inference: {inf_time:.2f} ms | Total: {frame_time:.2f} ms")
         frame_id += 1
 
     reader.close()
     writer.close()
+
+    total_time = time.time() - total_start_time
+    avg_fps = frame_id / total_time
+
+    print("\n====== Inference Performance Summary ======")
+    print(f"Total frames processed: {frame_id}")
+    print(f"Total elapsed time: {total_time:.2f} sec")
+    print(f"Average FPS: {avg_fps:.2f}")
+    print(f"Average Inference Time: {np.mean(inf_times):.2f} ms")
+    print(f"Min Inference Time: {np.min(inf_times):.2f} ms")
+    print(f"Max Inference Time: {np.max(inf_times):.2f} ms")
     print("[INFO] Video output đã lưu tại:", video_output_path)
+
+    # (Tùy chọn) Ghi log ra CSV
+    save_log = True
+    if save_log:
+        with open("performance_log.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["FrameID", "InferenceTime_ms", "FullFrameTime_ms", "Score", "Label"])
+            writer.writerows(perf_log)
+        print("[INFO] Đã ghi log hiệu năng vào performance_log.csv")
 
 
 if __name__ == "__main__":
