@@ -3,6 +3,7 @@ import xir
 import numpy as np
 import cv2
 import time
+import imageio
 
 
 def get_input_output_tensors(runner):
@@ -29,7 +30,7 @@ def get_child_subgraph(graph):
 
 
 def preprocess_frame(frame, input_shape):
-    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    img = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     img = cv2.resize(img, (input_shape[2], input_shape[1]), interpolation=cv2.INTER_LINEAR)
     img = np.expand_dims(img, axis=0)
     return img
@@ -48,22 +49,13 @@ def run_video_inference(xmodel_path, video_input_path, video_output_path):
     input_data_buffer = [np.empty(input_shape, dtype=input_dtype, order="C")]
     output_data_buffer = [np.empty(output_shape, dtype=output_dtype, order="C")]
 
-    # Mở video input
-    cap = cv2.VideoCapture(video_input_path)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-
-    # Ghi video output
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(video_output_path, fourcc, fps, (width, height))
+    reader = imageio.get_reader(video_input_path)
+    fps = reader.get_meta_data()['fps']
+    writer = imageio.get_writer(video_output_path, fps=fps)
 
     frame_id = 0
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
+    for frame in reader:
+        # imageio uses RGB by default
         input_data = preprocess_frame(frame, input_shape)
         np.copyto(input_data_buffer[0], input_data.reshape(input_shape).astype(input_dtype))
 
@@ -76,15 +68,17 @@ def run_video_inference(xmodel_path, video_input_path, video_output_path):
 
         # Vẽ nhãn lên frame
         text = f"{'Nga' if label == 1 else 'Khong nga'} ({output_real:.2f})"
-        color = (0, 0, 255) if label == 1 else (0, 255, 0)
-        cv2.putText(frame, text, (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
+        color = (255, 0, 0) if label == 1 else (0, 255, 0)  # RGB
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        cv2.putText(frame_bgr, text, (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-        out.write(frame)
+        writer.append_data(frame_rgb)
         print(f"[INFO] Frame {frame_id}: {text}")
         frame_id += 1
 
-    cap.release()
-    out.release()
+    reader.close()
+    writer.close()
     print("[INFO] Video output đã lưu tại:", video_output_path)
 
 
